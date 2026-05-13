@@ -1,98 +1,73 @@
 """
-Connexion MongoDB Atlas et opérations sur la collection des articles.
+Stockage local des articles en JSON (remplace MongoDB Atlas).
 """
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 from typing import Any
 
-from pymongo import MongoClient
-from pymongo.collection import Collection
-from pymongo.errors import PyMongoError
-
-_client: MongoClient | None = None
+_STORE_PATH = Path(os.environ.get("JSON_STORE_PATH", "articles.json"))
+_cache: list[dict[str, Any]] | None = None
 
 
-def _get_collection() -> Collection[Any]:
-    """Retourne la collection `articles`, en initialisant le client si nécessaire."""
-    global _client
-    uri = os.environ.get("MONGO_URI")
-    if not uri:
-        raise ValueError(
-            "La variable d'environnement MONGO_URI est manquante ou vide."
-        )
-    db_name = os.environ.get("MONGO_DB_NAME", "lexmaroc")
-    if _client is None:
-        _client = MongoClient(uri, serverSelectionTimeoutMS=15000)
-    return _client[db_name]["articles"]
+def _load() -> list[dict[str, Any]]:
+    global _cache
+    if _cache is None:
+        if _STORE_PATH.exists():
+            with open(_STORE_PATH, "r", encoding="utf-8") as f:
+                _cache = json.load(f)
+        else:
+            _cache = []
+    return _cache
+
+
+def _save(articles: list[dict[str, Any]]) -> None:
+    global _cache
+    _cache = articles
+    with open(_STORE_PATH, "w", encoding="utf-8") as f:
+        json.dump(articles, f, ensure_ascii=False, indent=2)
 
 
 def insert_articles(articles: list[dict[str, Any]]) -> int:
-    """
-    Insère une liste d'articles dans MongoDB.
-
-    Chaque élément doit contenir au minimum :
-    code_name, article_number, article_text, source_file.
-    """
     if not articles:
         return 0
     try:
-        coll = _get_collection()
-        coll.create_index([("code_name", 1), ("article_number", 1)])
-        result = coll.insert_many(articles, ordered=False)
-        return len(result.inserted_ids)
-    except PyMongoError as exc:
-        raise RuntimeError(
-            f"Erreur MongoDB lors de l'insertion des articles : {exc}"
-        ) from exc
+        existing = _load()
+        existing.extend(articles)
+        _save(existing)
+        return len(articles)
+    except Exception as exc:
+        raise RuntimeError(f"Erreur JSON insertion : {exc}") from exc
 
 
 def get_article(code_name: str, article_number: str | int) -> dict[str, Any]:
-    """Récupère un article par code juridique et numéro d'article."""
     try:
-        coll = _get_collection()
-        doc = coll.find_one(
-            {"code_name": code_name, "article_number": str(article_number)}
-        )
-        if doc is None:
-            doc = coll.find_one(
-                {"code_name": code_name, "article_number": article_number}
-            )
-        if doc is None:
-            return {}
-        doc.pop("_id", None)
-        return dict(doc)
-    except PyMongoError as exc:
-        raise RuntimeError(
-            f"Erreur MongoDB lors de la lecture d'un article : {exc}"
-        ) from exc
+        for a in _load():
+            if a.get("code_name") == code_name and str(a.get("article_number")) == str(article_number):
+                return dict(a)
+        return {}
+    except Exception as exc:
+        raise RuntimeError(f"Erreur JSON lecture : {exc}") from exc
 
 
 def count_articles() -> int:
-    """Retourne le nombre total de documents dans la collection articles."""
     try:
-        coll = _get_collection()
-        return int(coll.count_documents({}))
-    except PyMongoError as exc:
-        raise RuntimeError(
-            f"Erreur MongoDB lors du comptage des articles : {exc}"
-        ) from exc
+        return len(_load())
+    except Exception as exc:
+        raise RuntimeError(f"Erreur JSON comptage : {exc}") from exc
 
 
 def delete_articles_by_source_files(source_files: list[str]) -> int:
-    """
-    Supprime les articles correspondant aux fichiers sources indiqués.
-
-    Utilisé avant une réingestion pour éviter les doublons dans MongoDB.
-    """
     if not source_files:
         return 0
     try:
-        coll = _get_collection()
-        res = coll.delete_many({"source_file": {"$in": source_files}})
-        return int(res.deleted_count)
-    except PyMongoError as exc:
-        raise RuntimeError(
-            f"Erreur MongoDB lors de la suppression d'articles : {exc}"
-        ) from exc
+        articles = _load()
+        before = len(articles)
+        articles = [a for a in articles if a.get("source_file") not in source_files]
+        _save(articles)
+        return before - len(articles)
+    except Exception as exc:
+        raise RuntimeError(f"Erreur JSON suppression : {exc}") from exc

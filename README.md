@@ -1,6 +1,6 @@
 # LexMaroc
 
-**LexMaroc** est une application d'assistance juridique spécialisée dans le droit marocain (français uniquement), basée sur une architecture **RAG** (génération augmentée par récupération) et le modèle **Claude** d'Anthropic. Les textes sont indexés dans **MongoDB Atlas** et **Qdrant Cloud** ; l'interface est développée avec **Streamlit**.
+**LexMaroc** est une application d'assistance juridique spécialisée dans le droit marocain (français uniquement), basée sur une architecture **RAG** (génération augmentée par récupération) et l'API **Gemini** de Google. Les textes sont indexés dans **MongoDB Atlas** et **Qdrant Cloud** ; l'interface est développée avec **Streamlit**.
 
 ## Architecture (schéma ASCII)
 
@@ -29,15 +29,15 @@
               Question utilisateur ────────┼──────── RAG (retrieve + prompt)
                                            ▼
                                   ┌────────────────┐
-                                  │ Anthropic API  │
-                                  │ Claude Sonnet  │
+                                  │ Google Gemini  │
+                                  │ API            │
                                   └────────────────┘
 ```
 
 ## Prérequis
 
 1. **Python 3.11 ou supérieur**
-2. Compte **Anthropic** avec clé API (`ANTHROPIC_API_KEY`)
+2. Clé API **Gemini** : créez une clé sur [Google AI Studio](https://aistudio.google.com/apikey) et définissez **`GEMINI_API_KEY`** ou **`GOOGLE_API_KEY`** (les deux sont acceptés).
 3. Cluster **MongoDB Atlas** (gratuit M0) et chaîne de connexion `mongodb+srv://...`
 4. Instance **Qdrant Cloud** (gratuit) : URL (`https://....qdrant.io`) et clé API
 5. Fichiers **PDF** des codes à indexer (par défaut dans `lexmaroc/data/`, ou un autre dossier via `LEXMAROC_DATA_DIR`, voir ci-dessous)
@@ -68,7 +68,7 @@
 4. Configurer les variables d'environnement :
 
    - Copier le fichier `env.example.txt` vers un fichier nommé `.env` **à la racine du dossier `lexmaroc/`** (fichier local non versionné).
-   - Renseigner les clés et URL réelles (MongoDB, Qdrant, Anthropic).
+   - Renseigner les clés et URL réelles (MongoDB, Qdrant, Gemini).
 
    Sous **Streamlit Cloud**, utiliser l'écran **Secrets** et reprendre exactement les mêmes noms de clés que dans `env.example.txt` (voir section déploiement).
 
@@ -123,8 +123,8 @@ Le navigateur s'ouvre sur l'interface de chat. Vérifiez que le fichier `.env` e
 3. Ouvrir **Settings → Secrets** et coller un bloc TOML du type :
 
    ```toml
-   ANTHROPIC_API_KEY = "sk-ant-..."
-   ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
+   GEMINI_API_KEY = "..."
+   GEMINI_MODEL = ""
    MAX_TOKENS = "1000"
    MONGO_URI = "mongodb+srv://..."
    MONGO_DB_NAME = "lexmaroc"
@@ -147,11 +147,13 @@ Le navigateur s'ouvre sur l'interface de chat. Vérifiez que le fichier `.env` e
 |----------|---------------------|
 | `MONGO_URI` manquant ou refus de connexion | Vérifier l'URI Atlas, l'utilisateur, le mot de passe et l'IP autorisée (**Network Access** : `0.0.0.0/0` pour les tests). |
 | Erreur Qdrant (401, 403) | Contrôler `QDRANT_URL` et `QDRANT_API_KEY` ; vérifier que la collection existe ou laisser le script la créer. |
-| Erreur Anthropic | Vérifier `ANTHROPIC_API_KEY` et le quota du compte. |
+| Erreur Gemini (404 model not found) | Les noms de modèles évoluent ; laissez **`GEMINI_MODEL` vide** pour choix automatique, ou fixez un nom listé pour votre clé dans AI Studio. |
+| Erreur Gemini (quota / auth) | Vérifier `GEMINI_API_KEY` ou `GOOGLE_API_KEY` et le quota AI Studio. |
 | Aucun article après ingestion | Les PDF doivent contenir des titres d'articles reconnus par le découpeur ; voir `data/README_data.txt`. Vérifiez aussi `LEXMAROC_DATA_DIR` si vous n'utilisez pas `data/`. |
 | `ModuleNotFoundError` | S'assurer d'avoir activé le bon environnement virtuel et relancé `pip install -r requirements.txt`. |
 | Déploiement Streamlit très lent au premier message | Normal : chargement de PyTorch et du modèle d'embeddings ; les requêtes suivantes sont plus rapides. |
 | Réponses hors sujet ou sans citation | Vérifier que l'ingestion a bien peuplé Qdrant ; contrôler les logs d'erreur dans l'interface Streamlit. |
+| « No secrets files found » au démarrage | En local, lancer Streamlit depuis `lexmaroc/` ; un fichier minimal `lexmaroc/.streamlit/secrets.toml` est fourni. Les clés peuvent rester dans `lexmaroc/.env`. |
 
 ## Licence et avertissement
 

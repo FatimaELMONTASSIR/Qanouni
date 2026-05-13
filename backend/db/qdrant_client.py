@@ -14,6 +14,7 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 
 VECTOR_SIZE = 384
 COLLECTION_DEFAULT = "lexmaroc_articles"
+BATCH_SIZE = 100  # upload par lots pour eviter les timeouts
 
 _client: QdrantClient | None = None
 
@@ -28,15 +29,15 @@ def _get_client() -> QdrantClient:
     api_key = os.environ.get("QDRANT_API_KEY")
     if not url or not api_key:
         raise ValueError(
-            "QDRANT_URL et QDRANT_API_KEY doivent être définis dans l'environnement."
+            "QDRANT_URL et QDRANT_API_KEY doivent etre definis dans l'environnement."
         )
     if _client is None:
-        _client = QdrantClient(url=url, api_key=api_key, timeout=60)
+        _client = QdrantClient(url=url, api_key=api_key, timeout=120)
     return _client
 
 
 def _ensure_collection(client: QdrantClient, name: str) -> None:
-    """Crée la collection si elle n'existe pas (vecteur 384, distance cosinus)."""
+    """Cree la collection si elle n'existe pas (vecteur 384, distance cosinus)."""
     try:
         names = client.get_collections().collections
         existing = {c.name for c in names}
@@ -51,22 +52,22 @@ def _ensure_collection(client: QdrantClient, name: str) -> None:
         )
     except UnexpectedResponse as exc:
         raise RuntimeError(
-            f"Erreur Qdrant lors de la création ou la vérification de la collection : {exc}"
+            f"Erreur Qdrant creation collection : {exc}"
         ) from exc
 
 
 def _stable_point_id(code_name: str, article_number: str, source_file: str) -> str:
-    """Identifiant déterministe pour éviter les doublons lors des réingestions."""
+    """Identifiant deterministe pour eviter les doublons lors des reingestions."""
     raw = f"{code_name}|{article_number}|{source_file}"
     return str(uuid.uuid5(uuid.NAMESPACE_URL, raw))
 
 
 def upsert_articles(articles_with_embeddings: list[dict[str, Any]]) -> int:
     """
-    Insère ou met à jour des points dans Qdrant.
+    Insere ou met a jour des points dans Qdrant par lots de 100.
 
-    Chaque élément attendu :
-    - vector : liste de 384 flottants
+    Chaque element attendu :
+    - vector  : liste de 384 flottants
     - payload : dict avec code_name, article_number, article_text, source_file
     """
     if not articles_with_embeddings:
@@ -75,35 +76,45 @@ def upsert_articles(articles_with_embeddings: list[dict[str, Any]]) -> int:
         client = _get_client()
         name = _collection_name()
         _ensure_collection(client, name)
+
+        # Construction de tous les points
         points: list[qm.PointStruct] = []
         for item in articles_with_embeddings:
             vec = item.get("vector")
             payload = dict(item.get("payload") or {})
             if vec is None or len(vec) != VECTOR_SIZE:
                 raise ValueError("Chaque article doit avoir un vecteur de taille 384.")
-            cid = payload.get("code_name", "")
-            anum = str(payload.get("article_number", ""))
-            src = payload.get("source_file", "")
-            pid = _stable_point_id(cid, anum, src)
-            points.append(
-                qm.PointStruct(id=pid, vector=list(vec), payload=payload)
+            pid = _stable_point_id(
+                payload.get("code_name", ""),
+                str(payload.get("article_number", "")),
+                payload.get("source_file", ""),
             )
-        client.upsert(collection_name=name, points=points, wait=True)
-        return len(points)
+            points.append(qm.PointStruct(id=pid, vector=list(vec), payload=payload))
+
+        # Upload par lots de BATCH_SIZE
+        total = 0
+        for i in range(0, len(points), BATCH_SIZE):
+            batch = points[i : i + BATCH_SIZE]
+            client.upsert(collection_name=name, points=batch, wait=True)
+            total += len(batch)
+            print(f"    Qdrant : {total}/{len(points)} points uploades...", end="\r")
+
+        print(f"    Qdrant : {total}/{len(points)} points uploades.   ")
+        return total
+
     except UnexpectedResponse as exc:
         raise RuntimeError(
-            f"Erreur Qdrant lors de l'upsert des articles : {exc}"
+            f"Erreur Qdrant upsert : {exc}"
         ) from exc
 
 
 def search(query_vector: list[float], top_k: int = 5) -> list[dict[str, Any]]:
     """
-    Recherche par similarité cosinus.
-
+    Recherche par similarite cosinus.
     Retourne une liste de dicts : id, score, payload.
     """
     if len(query_vector) != VECTOR_SIZE:
-        raise ValueError("Le vecteur de requête doit être de dimension 384.")
+        raise ValueError("Le vecteur de requete doit etre de dimension 384.")
     try:
         client = _get_client()
         name = _collection_name()
@@ -114,17 +125,11 @@ def search(query_vector: list[float], top_k: int = 5) -> list[dict[str, Any]]:
             limit=top_k,
             with_payload=True,
         )
-        out: list[dict[str, Any]] = []
-        for hit in res:
-            out.append(
-                {
-                    "id": hit.id,
-                    "score": float(hit.score),
-                    "payload": dict(hit.payload or {}),
-                }
-            )
-        return out
+        return [
+            {"id": hit.id, "score": float(hit.score), "payload": dict(hit.payload or {})}
+            for hit in res
+        ]
     except UnexpectedResponse as exc:
         raise RuntimeError(
-            f"Erreur Qdrant lors de la recherche vectorielle : {exc}"
+            f"Erreur Qdrant recherche : {exc}"
         ) from exc

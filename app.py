@@ -19,6 +19,11 @@ load_dotenv()
 
 import streamlit as st
 
+st.set_page_config(
+    page_title="LexMaroc",
+    page_icon="⚖️",
+    layout="centered",
+)
 
 def _appliquer_secrets_streamlit() -> None:
     """Copie les secrets Streamlit Cloud dans les variables d'environnement."""
@@ -36,7 +41,7 @@ def _appliquer_secrets_streamlit() -> None:
 
 _appliquer_secrets_streamlit()
 
-from backend.rag.chain import ask_lexmaroc
+from backend.rag.chain import ask_lexmaroc, texte_assistant_pour_historique
 
 CODES_DISPONIBLES = [
     "Code du Travail",
@@ -61,11 +66,7 @@ def _reinitialiser_conversation() -> None:
 
 
 def main() -> None:
-    st.set_page_config(
-        page_title="LexMaroc",
-        page_icon="⚖️",
-        layout="centered",
-    )
+    
     _initialiser_session()
 
     st.markdown(
@@ -105,6 +106,9 @@ def main() -> None:
         role = msg.get("role", "user")
         with st.chat_message(role):
             st.markdown(msg.get("content", ""))
+            if role == "assistant" and msg.get("detail"):
+                with st.expander("Voir plus"):
+                    st.markdown(msg["detail"])
             if role == "assistant" and msg.get("sources"):
                 with st.expander("📋 Articles consultés"):
                     for src in msg["sources"]:
@@ -125,7 +129,8 @@ def main() -> None:
                 resultat = ask_lexmaroc(
                     prompt, list(st.session_state.chat_history)
                 )
-                reponse = resultat.get("answer", "")
+                reponse = resultat.get("answer_short") or resultat.get("answer", "")
+                detail = resultat.get("answer_detail")
                 sources = resultat.get("sources", [])
             except ValueError as err:
                 st.error(f"Configuration manquante : {err}")
@@ -133,6 +138,7 @@ def main() -> None:
                     "Impossible de contacter le service : vérifiez vos clés et "
                     "paramètres dans les secrets ou le fichier d'environnement."
                 )
+                detail = None
                 sources = []
             except RuntimeError as err:
                 st.error(str(err))
@@ -140,6 +146,7 @@ def main() -> None:
                     "Une erreur technique est survenue. Consultez le message "
                     "ci-dessus ou réessayez plus tard."
                 )
+                detail = None
                 sources = []
             except Exception as err:
                 st.error(f"Erreur inattendue : {err}")
@@ -147,9 +154,13 @@ def main() -> None:
                     "Une erreur inattendue est survenue. Veuillez réessayer "
                     "ultérieurement."
                 )
+                detail = None
                 sources = []
 
             st.markdown(reponse)
+            if detail:
+                with st.expander("Voir plus"):
+                    st.markdown(detail)
             if sources:
                 with st.expander("📋 Articles consultés"):
                     for src in sources:
@@ -163,15 +174,19 @@ def main() -> None:
             {"role": "user", "content": prompt}
         )
         st.session_state.chat_history.append(
-            {"role": "assistant", "content": reponse}
-        )
-        st.session_state.messages.append(
             {
                 "role": "assistant",
-                "content": reponse,
-                "sources": sources,
+                "content": texte_assistant_pour_historique(reponse, detail),
             }
         )
+        msg_assistant: dict = {
+            "role": "assistant",
+            "content": reponse,
+            "sources": sources,
+        }
+        if detail:
+            msg_assistant["detail"] = detail
+        st.session_state.messages.append(msg_assistant)
 
     st.markdown(
         '<div class="lexmaroc-banner">⚠️ LexMaroc est un outil d\'information. '
